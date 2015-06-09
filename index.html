@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+
+	<head>
+		<meta charset="utf-8">
+
+		<title>How to ride a whale</title>
+
+		<meta name="description" content="Introduction to a coreos cluster">
+		<meta name="author" content="Vincent Vermersch">
+
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, minimal-ui">
+
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/league.css" id="theme">
+
+		<!-- Code syntax highlighting -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+		<style type="text/css">
+			h1 {
+				font-size: 70px !important;
+			}
+            .prez {
+                width:350px;
+            }
+		</style>
+	</head>
+
+	<body>
+
+		<div class="reveal">
+			<div class="slides" >
+				<section >
+					<h2>How to ride a whale</h2>
+					<p>
+						Creating a functionnal CoreOS cluster 
+					</p>
+					<img src="img/coreos.jpg" alt="">
+					<aside class="notes">
+					    Coreos : centaine de MB
+					    BTRFS, livr&eacute; avec fleet, etcd et docker
+					    
+					    Communication avec les autres services/machines
+				    </aside>
+				</section>
+
+				<section>
+				    <section>
+				        <h1>The service</h1>
+				        <ul>
+				            <li>Based on systemd</li>
+				            <li>Unit or template files with basic variables</li>
+				        </ul>
+				        <img src="img/unit.jpg" alt="" class="prez" />
+				        <aside class="notes">
+                           D'abord le service, BDD, site, worker ...
+                        </aside>
+				    </section>
+				    <section>
+                        <h2>A MongoDB database</h2>
+                        <p>units template : mongodb@.service</p>
+                        <pre><code data-trim contenteditable>
+[Unit]
+Description=MongoDB
+After=docker.service
+
+[Service]
+ExecStartPre=/usr/bin/docker pull mongo:latest
+ExecStartPre=-/usr/bin/docker rm -f -v %p.%i
+ExecStart=/usr/bin/docker run --rm --name %p.%i -p 27017:27017 \
+    --volume=/home/data/mongo/latest:/data/db 
+    --cpu-shares=4 -m="30g" 
+    mongo:latest
+ExecStartPost=/bin/etcdctl set /skydns/fr/mycloud/%p/%i '{"host":"%H", "port":27017}'
+ExecStartPost=/bin/etcdctl set /databases/%p/%i '{"host":"%H", "port":27017}'
+ExecStop=/bin/etcdctl rm /skydns/fr/mycloud/%p/%i 
+ExecStop=/bin/etcdctl rm /databases/%p.%i
+ExecStop=-/usr/bin/docker stop %p.%i
+Restart=always
+
+[X-Fleet]
+Conflicts=%p@*
+MachineMetadata=disk=ssd
+                        </code></pre>
+					</section>
+					<aside class="notes">
+                        Un conteneur simple, avec lequel on va pouvoir des choses avant et apr&egrave;s. <br>
+                        mais aussi un template de conteneur qui va me permettre d'avoir plusieurs services utilisant le fichier.
+                        Peut &ecirc;tre un site internet, un supervisor ...
+				    </aside>
+				</section>
+				
+				<section>
+                    <section>
+                        <h3>Fleet</h3>
+                        <ul>
+                            <li>Remote control</li>
+                            <li>Basic scheduler</li>
+                            <li>Make services survive to machine crash</li>
+                        </ul>
+                        <p>
+                            <img src="img/fleet.jpg" alt="" class="prez" />
+                        </p>
+                        <aside class="notes">
+                            Maintenant faut le lancer
+                        </aside>
+                    </section>
+                    <section>
+                        <p>Simple command line</p>
+                        <pre><code data-trim contenteditable>
+fleetctl submit mongodb@.service
+fleetctl start mongodb@x1
+fleetctl start mongodb@x2
+fleetctl start mongodb@x3
+fleetctl list-units
+fleetctl journal -f mongodb@x1
+                        </code></pre>
+                        <pre><code data-trim contenteditable>
+coreos:
+  fleet:
+      public-ip: $public_ipv4
+      metadata: disk=ssd,hoster=ovh,location=FR
+                        </code></pre>
+                    </section>
+				</section>
+				
+				<section>
+					<section>
+						<h3>Etcd</h3>
+						<ul>
+						    <li>Cluster registry</li>
+						    <li>Raft consensus implementation</li>
+						    <li>Use etcd2</li>
+						</ul>
+                        <p>
+					    <small>http://thesecretlivesofdata.com/raft/</small>
+					    </p>
+					    <p>
+					        <img src="img/etcd.jpg" alt="" height="350px" />
+					    </p>
+					    <aside class="notes">
+					        La communication passe par
+					        consensus : comment faire pour qu'il y ait toujours une majorit&eacute; de décision
+					    </aside>
+				    </section>
+				    <section>
+						<p>Access anywhere</p>
+						<pre><code data-trim contenteditable>
+# Use it via command line
+> etcdctl set /skydns/fr/mycloud/mongodb/x1 {"host":"core-1", "port":27017}
+# Or HTTP
+> curl -L http://127.0.0.1:4001/v2/keys/skydns/fr/mycloud/mongodb/x1
+{"host":"core-1", "port":27017}
+                        </code></pre>
+						<pre><code data-trim contenteditable>
+coreos:
+  etcd:
+    # generate a new token for each unique cluster from https://discovery.etcd.io/new
+    discovery: https://discovery.etcd.io/{token}
+    addr: $public_ipv4:4001
+    peer-addr: $public_ipv4:7001
+						</code></pre>
+                        <p>Or etcd-browser for human beings</p>
+                        <aside class="notes">ce qui est bien avec etcd, plein de choses tournent d&eacute;j&agrave; avec </aside>
+				    </section>
+				    <section>
+				        <p><img src="img/etcd-browser.png" alt=""></p>
+				    </section>    
+				</section>
+
+				<section>
+                    <section>
+                        <!-- 1mn Picture tom tom or map -->
+                        <H3>SkyDNS</H3>
+                        <ul>
+                            <li>Nameserver (@95%)</li>
+                            <li>Store  and read data from etcd (or consul)</li>
+                            <li>Simplest DNS to administrate ever</li>
+                        </ul>
+                        <p><img src="img/skydns.jpg" alt="" height="380" style="clip:rect(1px, 10em, 3rem, 2ch)"></p>
+                        <aside class="notes">maintent il faut que je trouve le service</aside>
+				    </section>
+				    <section>
+                        <pre><code data-trim contenteditable>
+dig *.mongodb.mycloud.fr SRV @localhost
+                        </code></pre>
+                        <pre><code data-trim contenteditable>
+[Unit]
+Description=SkyDNS
+After=docker.service
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f skydns
+ExecStart=/usr/bin/docker run --rm --name skydns \
+      -e ETCD_MACHINES=http://127.0.0.1:4001 \
+      -e SKYDNS_ADDR=0.0.0.0:53 \
+      -e SKYDNS_DOMAIN=mycloud.fr \
+      -e SKYDNS_NAMESERVERS=8.8.8.8:53,8.8.4.4:53 \
+      --net=host \
+      skynetservices/skydns:latest
+ExecStop=-/usr/bin/docker stop skydns
+Restart=always
+                        </code></pre>
+                            <aside class="notes">
+                                consul peut aussi &ecirc;tre utilisé
+                            </aside>
+        			</section>
+				</section>
+				<section>
+					<section>
+						<h3>Confd</h3>
+						<ul>
+						    <li>Read etcd and write config files</li>
+						    <li>Basic go template </li>
+						    <li>check, and reload services</li>
+						</ul>
+                       <p>
+                           <img src="img/confd.jpg" alt="" height="350px" />
+                       </p>
+                        <aside class="notes">
+                            interface de validation entre etcd et la configuration des services
+                        </aside>
+				    </section>
+				    <section>
+				        <pre><code data-trim contenteditable>
+[mongodb]
+port = 27017{{ range gets "/databases/mongodb/*"}}{{ $server := json .Value }}
+servers[] = {{ $server.host }}{{end}}
+				        </code></pre>
+						<pre><code data-trim contenteditable>
+[Unit]
+Description=Confd
+Wants=etcd.service
+[Service]
+ExecStartPre=-/usr/bin/mkdir -p /opt/bin
+ExecStartPre=-/usr/bin/wget -N -P /opt/bin https://github.com/kelseyhightower/confd/releases/download/v0.9.0/confd-0.8.0-linux-amd64
+ExecStartPre=-/bin/rm /opt/bin/confd
+ExecStartPre=-/bin/mv /opt/bin/confd-0.9.0-linux-amd64 /opt/bin/confd
+ExecStartPre=-/bin/chmod +x /opt/bin/confd
+ExecStart=/opt/bin/confd  -backend etcd -node 127.0.0.1:4001 -interval=10
+ExecStop=-/bin/kill $(pidof confd)
+Restart=always
+                        </code></pre>
+                        <aside class="notes">Mais je n'ai qu'un seul port 80 ou 443 ou 3306</aside>
+                    </section>
+				</section>
+				<section>
+					<section>
+					    <h2>HAProxy</h2>
+                        <p>TCP proxy, load balancing, health check<br>
+                         and mitigation since 1996</p>
+                         
+                         <p>
+                             <img src="img/haproxy.jpg" alt="" class="prez" />
+                         </p>
+                         <aside class="notes">
+                             container already plugged in to etcd
+                         </aside>
+				    </section>
+				    <section>
+				        <pre><code data-trim contenteditable>
+http://mycloud.fr:1000
+etcdctl set /services/mywordpress.fr/scheme http
+etcdctl set /services/mywordpress.fr/hosts/1 1.2.3.4:80
+etcdctl set /services/mywordpress.fr/hosts/1 1.2.3.5:80
+				        </code></pre>
+						<pre><code data-trim contenteditable>
+[Unit]
+Description=HA proxy load balancer
+After=docker.service
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f balancer
+ExecStart=/usr/bin/docker run --rm --name haproxy \
+  -e ETCD_NODE=127.0.0.1:4001
+  --volume /etc/certs:/etc/certs/ \
+  --net host \
+  cstpdk/haproxy-confd
+ExecReload=/usr/bin/docker exec balancer service haproxy reload
+ExecStop=/usr/bin/docker stop balancer
+Restart=always
+						</code></pre>
+                        <aside class="notes">
+                            L&agrave; j'ai mes services qui tournent 
+                            Je sais comment y acc&egrave;der en internet et en externe
+                            ils peuvent se load balancer avec health check
+                            si il tombe il est relanc&eacute; sur un autre serveur
+                            en interne la modification est immédiate
+                            en externe c'est le d&eacute;lai de propagation dns 5mn &agrave; 24h
+
+                            La r&eacute;plication permet de g&eacute;rer la survie des bases de donnés.
+                            Il me manque une chose, comment r&eacute;pliquer les statiques 
+                        </aside>
+					</section>
+				</section>
+				
+				<section>
+                    <section>
+                        <!-- Quel est le d&eacute;lai de synchro -->
+                        <h2>Syncthing</h2>
+                        <ul>
+                            <li>Torrent based private cloud</li>
+                            <li>Neat web interface</li>
+                        </ul>
+                        <p>
+                            <img src="img/syncthing.jpg" height="300px" alt="">
+                        </p>
+				    </section>
+				    <section>
+                        <pre><code data-trim contenteditable>
+[Unit]
+Description=Syncthing
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f -v syncthing
+ExecStartPre=-/usr/bin/docker pull istepanov/syncthing:latest
+ExecStart=/usr/bin/docker run --rm --name syncthing \
+  -p 9080:8080 -p 22000:22000 -p 21025:21025/udp \
+  -v /etc/syncthing:/home/syncthing/.config/syncthing \
+  -v /home/data/sync:/home/syncthing/Sync \
+  istepanov/syncthing
+ExecStop=-/usr/bin/docker stop syncthing
+Restart=always
+                        </code></pre>
+				    </section>
+				</section>
+				
+				<section>
+				    <section>
+                        <!-- 1mn optionnel image digging dog -->
+				        <h3>Datadatog</h3>
+				        <ul>
+                            <li>plug everything in easily</li>
+				            <li>StatsD Graphite on vitamins</li>
+				            <li>Monitoring and Alerting</li>
+				        </ul>
+                        <p>
+				            <img src="img/datadog.jpg" alt="" class="prez">
+				        </p>
+				        <p>
+                            <small>Or cadvisor+heapster+fluentd or prometheus</small>
+                        </p>
+				        <aside class="notes">
+				            Everything can become messy and clumsy you need to monitor and graph to understand
+				        </aside>
+				        
+				    </section>
+                    <section>
+                        <pre><code data-trim contenteditable>
+[Unit]
+Description=Datadog monitoring
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f datadog
+ExecStartPre=-/usr/bin/docker pull datadog/docker-dd-agent
+ExecStart=/usr/bin/docker run --rm --name datadog \
+      -v /etc/datadog/conf.d:/etc/dd-agent/conf.d \
+      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v /proc/mounts:/host/proc/mounts:ro \
+      -v /sys/fs/cgroup/:/host/sys/fs/cgroup:ro \
+      -e API_KEY=GET-IT-ON-DATADOG \
+      --net=host \
+      datadog/docker-dd-agent
+ExecStop=-/usr/bin/docker stop datadog
+Restart=always
+                        </code></pre>
+                    </section>
+				</section>
+				
+				<section>
+				    <section>
+                        <!-- Image ring -->
+				        <h3>Cloud Init</h3>
+				        <ul>
+                            <li>BareMetal (ovh, online)</li>
+                            <li>Virtual machines (Ganeti, Openstack) </li>
+				            <li>Cloud providers (AWS, DO, GC ...)</li>
+				        </ul>
+				        <img src="img/cloud_init.jpg" height=300 />
+				        <aside class="notes">
+				            one file to rule them all
+				        </aside>
+				    </section>
+				    <section>
+					    <pre><code data-trim contenteditable>
+#cloud-config
+coreos:
+  update:
+    reboot-strategy: best-effort
+    group: stable
+  fleet:
+    public-ip: $public_ipv4
+  units:
+    - name: haproxy.service
+      command: start
+      content: |
+      [Unit]
+      ....
+write_files:
+  -
+    path: /etc/resolv.conf
+    owner: root:root
+    content: |
+      nameserver 127.0.0.1
+      nameserver 8.8.8.8
+# List of allowed keys for core user
+ssh_authorized_keys:
+  - ssh-rsa AAAAB3NzaC1y
+  					    </code></pre>
+  					 </section>
+				</section>
+				
+				<section>
+                    <h2>Questions ?</h2>
+                    <br>
+				    
+				    <small>
+				    <ul>
+						<li>https://coreos.com/blog/managing-coreos-with-ansible/</li>
+						<li>http://www.freedesktop.org/software/systemd/man/systemd.service.html</li>
+						<li>https://github.com/kelseyhightower/confd/blob/master/docs/templates.md</li>
+						<li>http://cbonte.github.io/haproxy-dconv/configuration-1.5.html</li>
+						<li>https://www.digitalocean.com/community/tutorials/how-to-set-up-a-coreos-cluster-on-digitalocean</li>
+					</ul>
+					</small>
+				</section>
+			</div>
+
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.js"></script>
+
+		<script>
+
+			// Full list of configuration options available at:
+			// https://github.com/hakimel/reveal.js#configuration
+			Reveal.initialize({
+				controls: true,
+				progress: true,
+				history: true,
+				center: true,
+
+				transition: 'slide', // none/fade/slide/convex/concave/zoom
+
+				// Optional reveal.js plugins
+				dependencies: [
+					{ src: 'lib/js/classList.js', condition: function() { return !document.body.classList; } },
+					{ src: 'plugin/markdown/marked.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/markdown/markdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/highlight/highlight.js', async: true, condition: function() { return !!document.querySelector( 'pre code' ); }, callback: function() { hljs.initHighlightingOnLoad(); } },
+					{ src: 'plugin/zoom-js/zoom.js', async: true },
+					{ src: 'plugin/notes/notes.js', async: true }
+				]
+			});
+
+		</script>
+
+	</body>
+</html>

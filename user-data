@@ -1,0 +1,129 @@
+#cloud-config
+
+coreos:
+  update:
+    reboot-strategy: off
+    group: stable
+  etcd:
+    # generate a new token for each unique cluster from https://discovery.etcd.io/new
+    # WARNING: replace each time you 'vagrant destroy'
+    #discovery: https://discovery.etcd.io/<token>
+    addr: $public_ipv4:4001
+    peer-addr: $public_ipv4:7001
+  fleet:
+    public-ip: $public_ipv4
+  units:
+    - name: etcd.service
+      command: start
+    - name: fleet.service
+      command: start
+    - name: docker-tcp.socket
+      command: start
+      enable: true
+      content: |
+        [Unit]
+        Description=Docker Socket for the API
+        [Socket]
+        ListenStream=2375
+        Service=docker.service
+        BindIPv6Only=both
+        [Install]
+        WantedBy=sockets.target
+    - name: docker.service
+      drop-ins:
+        - name: 50-dns-search.conf
+          content: |
+            [Service]
+            Environment='DOCKER_OPTS=--insecure-registry="0.0.0.0/0"'
+    - name: confd.service
+      command: start
+      content: |
+        [Unit]
+        Description=Confd
+        Wants=etcd.service
+        [Service]
+        ExecStartPre=-/usr/bin/mkdir -p /opt/bin
+        ExecStartPre=-/usr/bin/wget -N -P /opt/bin https://github.com/kelseyhightower/confd/releases/download/v0.9.0/confd-0.8.0-linux-amd64
+        ExecStartPre=-/bin/rm /opt/bin/confd
+        ExecStartPre=-/bin/mv /opt/bin/confd-0.9.0-linux-amd64 /opt/bin/confd
+        ExecStartPre=-/bin/chmod +x /opt/bin/confd
+        ExecStart=/opt/bin/confd  -backend etcd -node 127.0.0.1:4001 -interval=10
+        ExecStop=-/bin/kill $(pidof confd)
+        Restart=always
+    - name: balancer.service
+      command: start
+      content: |
+        [Unit]
+        Description=HA proxy load balancer
+        After=docker.service
+        [Service]
+        ExecStartPre=-/usr/bin/docker rm -f balancer
+        ExecStart=/usr/bin/docker run --rm --name haproxy \
+          -e ETCD_NODE=127.0.0.1:4001 \
+          --volume /etc/certs:/etc/certs/ \
+          --net host \
+          cstpdk/haproxy-confd
+        ExecReload=/usr/bin/docker exec balancer service haproxy reload
+        ExecStop=/usr/bin/docker stop balancer
+        Restart=always
+    - name: dns.service
+      command: start
+      content: |
+        [Unit]
+        Description=DNS service for local and remote discovery
+        Wants=docker.service
+        After=docker.service
+        [Service]
+        # Run latest image in standalone
+        ExecStartPre=-/usr/bin/docker kill skydns
+        ExecStartPre=-/usr/bin/docker rm skydns
+        ExecStart=/usr/bin/docker run --rm --name skydns \
+              -e ETCD_MACHINES=http://127.0.0.1:4001 \
+              -e SKYDNS_ADDR=0.0.0.0:53 \
+              -e SKYDNS_NAMESERVERS=8.8.8.8:53,8.8.4.4:53 \
+              --net=host \
+              skynetservices/skydns:latest
+        # Stop container
+        ExecStop=-/usr/bin/docker stop skydns
+        Restart=always
+    - name: syncthing
+      command: start
+      content: |
+        [Unit]
+        Description=Syncthing
+        [Service]
+        ExecStartPre=-/usr/bin/docker rm -f -v syncthing
+        ExecStartPre=-/usr/bin/docker pull istepanov/syncthing:latest
+        ExecStart=/usr/bin/docker run --rm --name syncthing \
+          -p 9080:8080 -p 22000:22000 -p 21025:21025/udp \
+          -v /etc/syncthing:/home/syncthing/.config/syncthing \
+          -v /home/data/sync:/home/syncthing/Sync \
+          istepanov/syncthing
+        ExecStop=-/usr/bin/docker stop syncthing
+        Restart=always
+    - name: settimezone.service
+      command: start
+      content: |
+        [Unit]
+        Description=Set the timezone
+        [Service]
+        ExecStart=/usr/bin/timedatectl set-timezone Europe/Paris
+        RemainAfterExit=yes
+        Type=oneshot
+  write_files:
+  -
+    path: /etc/resolv.conf
+    owner: root:root
+    content: |
+      nameserver 127.0.0.1
+      nameserver 8.8.8.8
+  # SSHD no root access and no password
+  -
+    path: /etc/ssh/sshd_config
+    permissions: 0600
+    owner: root:root
+    content: |
+      PermitRootLogin no
+      AllowUsers core
+      PasswordAuthentication no
+      ChallengeResponseAuthentication no

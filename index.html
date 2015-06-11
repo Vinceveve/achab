@@ -32,9 +32,6 @@
 			h1 {
 				font-size: 70px !important;
 			}
-            .prez {
-                width:350px;
-            }
 		</style>
 	</head>
 
@@ -45,7 +42,7 @@
 				<section >
 					<h2>How to ride a whale</h2>
 					<p>
-						Creating a functionnal CoreOS cluster 
+						Creating a functionnal CoreOS cluster
 					</p>
 					<img src="img/coreos.jpg" alt="">
 					<aside class="notes">
@@ -80,12 +77,12 @@ After=docker.service
 ExecStartPre=/usr/bin/docker pull mongo:latest
 ExecStartPre=-/usr/bin/docker rm -f -v %p.%i
 ExecStart=/usr/bin/docker run --rm --name %p.%i -p 27017:27017 \
-    --volume=/home/data/mongo/latest:/data/db 
-    --cpu-shares=4 -m="30g" 
+    --volume=/home/data/mongo/latest:/data/db
+    --cpu-shares=4 -m="30g"
     mongo:latest
 ExecStartPost=/bin/etcdctl set /skydns/fr/mycloud/%p/%i '{"host":"%H", "port":27017}'
 ExecStartPost=/bin/etcdctl set /databases/%p/%i '{"host":"%H", "port":27017}'
-ExecStop=/bin/etcdctl rm /skydns/fr/mycloud/%p/%i 
+ExecStop=/bin/etcdctl rm /skydns/fr/mycloud/%p/%i
 ExecStop=/bin/etcdctl rm /databases/%p.%i
 ExecStop=-/usr/bin/docker stop %p.%i
 Restart=always
@@ -177,7 +174,7 @@ coreos:
 				    </section>
 				    <section>
 				        <p><img src="img/etcd-browser.png" alt=""></p>
-				    </section>    
+				    </section>
 				</section>
 
 				<section>
@@ -291,7 +288,7 @@ ExecStop=/usr/bin/docker stop balancer
 Restart=always
 						</code></pre>
                         <aside class="notes">
-                            L&agrave; j'ai mes services qui tournent 
+                            L&agrave; j'ai mes services qui tournent
                             Je sais comment y acc&egrave;der en internet et en externe
                             ils peuvent se load balancer avec health check
                             si il tombe il est relanc&eacute; sur un autre serveur
@@ -299,7 +296,7 @@ Restart=always
                             en externe c'est le d&eacute;lai de propagation dns 5mn &agrave; 24h
 
                             La r&eacute;plication permet de g&eacute;rer la survie des bases de donnés.
-                            Il me manque une chose, comment r&eacute;pliquer les statiques 
+                            Il me manque une chose, comment r&eacute;pliquer les statiques
                         </aside>
 					</section>
 				</section>
@@ -422,7 +419,11 @@ ssh_authorized_keys:
 				<section>
                     <h2>Questions ?</h2>
                     <br>
-				    
+				    <pre><code data-trim contenteditable>
+git clone https://github.com/Vinceveve/achab
+cd achab
+vagrant up
+					</code></pre>
 				    <small>
 				    <ul>
 						<li>https://coreos.com/blog/managing-coreos-with-ansible/</li>
